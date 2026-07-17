@@ -21,8 +21,8 @@
 |------|------|
 | 前端框架 | 原生 JavaScript SPA（无框架依赖） |
 | 数据存储 | localStorage（key: `lean_mpms_v3`） |
-| 图表库 | ECharts |
-| 导出库 | SheetJS (XLSX) / html2canvas |
+| 图表库 | ECharts v5.5.0（本地 vendor/） |
+| 导出库 | SheetJS v0.18.5 / html2canvas v1.4.1（本地 vendor/） |
 | 密码加密 | SHA-256 (crypto.subtle + fallback) |
 
 ## 文件结构
@@ -36,6 +36,11 @@ todo-system/
 │   ├── config.js       # 配置：角色、菜单、领域、演示数据
 │   ├── store.js        # 数据层：CRUD + 统计 + 导入导出
 │   └── auth.js         # 认证层：登录、注册、权限检查
+├── vendor/             # 第三方库（本地化，无需外网CDN）
+│   ├── echarts.min.js       # ECharts 图表库 v5.5.0
+│   ├── html2canvas.min.js   # html2canvas 截图库 v1.4.1
+│   └── xlsx.full.min.js     # SheetJS Excel导入导出 v0.18.5
+├── README.md
 └── .gitignore
 ```
 
