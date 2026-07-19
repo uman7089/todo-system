@@ -65,6 +65,10 @@
         <select class="topbar-project-select" id="topbarProjectSelect" style="display:none" onchange="Router.switchProject(parseInt(this.value))">
           <option value="">选择项目...</option>
         </select>
+        <span class="sync-indicator" id="syncIndicator" onclick="Store.manualSync()" title="点击手动同步">
+          <span class="sync-dot sync-dot--offline"></span>
+          <span class="sync-text">本地模式</span>
+        </span>
         <span class="topbar-date" id="topbarDate"></span>
       </div>
     </header>
@@ -1250,6 +1254,35 @@ function updateDate() {
   if (mDate) mDate.textContent = (now.getMonth()+1) + '/' + now.getDate();
 }
 
+/* ===================== 同步状态指示器 ===================== */
+function initSyncIndicator() {
+  var indicator = document.getElementById('syncIndicator');
+  if (!indicator) return;
+
+  var dot = indicator.querySelector('.sync-dot');
+  var text = indicator.querySelector('.sync-text');
+
+  Store.onSyncStatusChange(function(status) {
+    if (!dot || !text) return;
+    dot.className = 'sync-dot sync-dot--' + status;
+
+    var labels = {
+      'offline': '本地模式',
+      'syncing': '同步中...',
+      'synced': '已同步',
+      'error': '同步失败'
+    };
+    text.textContent = labels[status] || status;
+
+    // 同步成功时，3秒后自动隐藏文字（移动端省空间）
+    if (status === 'synced') {
+      setTimeout(function() {
+        if (text) text.textContent = '已同步';
+      }, 3000);
+    }
+  });
+}
+
 /* ===================== 路由系统 ===================== */
 
 var Router = {
@@ -1273,6 +1306,9 @@ var Router = {
     await Store.init();
     updateDate();
     setInterval(updateDate, 60000);
+
+    // 初始化同步状态指示器
+    initSyncIndicator();
 
     // 检测移动端
     this._checkMobile();

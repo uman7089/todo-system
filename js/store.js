@@ -6,6 +6,18 @@
 var Store = {
   STORAGE_KEY: 'lean_mpms_v3',
 
+  // ── 云端同步配置 ──
+  SYNC_INTERVAL: 30000,         // 定时同步间隔：30秒
+  SYNC_DEBOUNCE: 2000,          // 写入后延迟 2 秒再推送（防抖）
+  _syncApiUrl: null,            // API 地址（自动检测）
+  _syncTimer: null,             // 定时同步计时器
+  _syncDebounceTimer: null,     // 防抖计时器
+  _syncStatus: 'offline',       // offline | syncing | synced | error
+  _lastSyncTime: null,          // 上次成功同步时间
+  _isSyncing: false,            // 是否正在同步
+  _syncCallbacks: [],           // 同步状态变更回调列表
+  _serverAvailable: false,      // 服务器是否可用
+
   /** 初始化 */
   async init() {
     if (!localStorage.getItem(this.STORAGE_KEY)) {
@@ -36,6 +48,169 @@ var Store = {
     this._ensureExtensionRequests();
     // 确保 weeklyReports 字段存在（向前兼容）
     this._ensureWeeklyReports();
+
+    // ── 初始化云端同步 ──
+    this._initSync();
+  },
+
+  /* ========== 云端同步层 ========== */
+
+  /** 初始化同步：检测服务器可用性，拉取最新数据，启动定时同步 */
+  _initSync: function() {
+    var self = this;
+    // 自动检测 API 地址（与前端同目录下的 api.php）
+    var loc = window.location;
+    self._syncApiUrl = loc.protocol + '//' + loc.host + loc.pathname.replace(/[^/]*$/, '') + 'api.php';
+
+    // 检测服务器是否可用（发 ping 请求）
+    self._detectServer().then(function(available) {
+      self._serverAvailable = available;
+      if (available) {
+        // 服务器可用：从服务器拉取最新数据
+        self._syncFromServer().then(function() {
+          // 拉取完成后，启动定时同步
+          self._startPeriodicSync();
+        });
+      } else {
+        // 服务器不可用：纯本地模式（GitHub Pages / 本地打开）
+        self._setSyncStatus('offline');
+      }
+    });
+  },
+
+  /** 检测服务器是否可用 */
+  _detectServer: function() {
+    var self = this;
+    return fetch(self._syncApiUrl + '?ping', { method: 'GET', cache: 'no-cache' })
+      .then(function(res) {
+        if (!res.ok) return false;
+        return res.json().then(function(data) { return data && data.ok === true; });
+      })
+      .catch(function() { return false; });
+  },
+
+  /** 从服务器拉取最新数据到 localStorage */
+  _syncFromServer: function() {
+    var self = this;
+    if (self._isSyncing) return Promise.resolve();
+    self._isSyncing = true;
+    self._setSyncStatus('syncing');
+
+    return fetch(self._syncApiUrl, { method: 'GET', cache: 'no-cache' })
+      .then(function(res) { return res.json(); })
+      .then(function(serverData) {
+        if (serverData && serverData !== null) {
+          // 服务器有数据：用服务器数据覆盖本地缓存
+          self._migrateData(serverData);
+          localStorage.setItem(self.STORAGE_KEY, JSON.stringify(serverData));
+          self._lastSyncTime = Date.now();
+          self._setSyncStatus('synced');
+          // 通知 UI 刷新
+          self._notifyDataChange();
+        } else {
+          // 服务器无数据：把本地数据推上去（首次部署）
+          self._syncToServer();
+        }
+        self._isSyncing = false;
+      })
+      .catch(function(err) {
+        self._isSyncing = false;
+        self._setSyncStatus('error');
+        console.warn('Sync from server failed:', err);
+      });
+  },
+
+  /** 将本地 localStorage 数据推送到服务器 */
+  _syncToServer: function() {
+    var self = this;
+    if (!self._serverAvailable) return;
+    if (self._isSyncing) return;
+
+    var raw = localStorage.getItem(self.STORAGE_KEY);
+    if (!raw) return;
+
+    self._setSyncStatus('syncing');
+
+    fetch(self._syncApiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: raw
+    })
+      .then(function(res) { return res.json(); })
+      .then(function(result) {
+        if (result && result.ok) {
+          self._lastSyncTime = Date.now();
+          self._setSyncStatus('synced');
+        } else {
+          self._setSyncStatus('error');
+        }
+      })
+      .catch(function(err) {
+        self._setSyncStatus('error');
+        console.warn('Sync to server failed:', err);
+      });
+  },
+
+  /** 防抖推送：写入后延迟 2 秒再推送，避免频繁请求 */
+  _scheduleSync: function() {
+    var self = this;
+    if (self._syncDebounceTimer) clearTimeout(self._syncDebounceTimer);
+    self._syncDebounceTimer = setTimeout(function() {
+      self._syncToServer();
+    }, self.SYNC_DEBOUNCE);
+  },
+
+  /** 启动定时同步 */
+  _startPeriodicSync: function() {
+    var self = this;
+    if (self._syncTimer) clearInterval(self._syncTimer);
+    self._syncTimer = setInterval(function() {
+      if (!self._isSyncing && self._serverAvailable) {
+        self._syncFromServer();
+      }
+    }, self.SYNC_INTERVAL);
+  },
+
+  /** 设置同步状态并通知回调 */
+  _setSyncStatus: function(status) {
+    this._syncStatus = status;
+    this._syncCallbacks.forEach(function(cb) {
+      try { cb(status); } catch (e) {}
+    });
+  },
+
+  /** 注册同步状态变更回调 */
+  onSyncStatusChange: function(callback) {
+    this._syncCallbacks.push(callback);
+    // 立即通知当前状态
+    try { callback(this._syncStatus); } catch (e) {}
+  },
+
+  /** 获取同步状态 */
+  getSyncStatus: function() {
+    return {
+      status: this._syncStatus,
+      serverAvailable: this._serverAvailable,
+      lastSyncTime: this._lastSyncTime,
+      apiUrl: this._serverAvailable ? this._syncApiUrl : null
+    };
+  },
+
+  /** 手动触发同步（用户点"立即同步"按钮时调用） */
+  manualSync: function() {
+    if (this._serverAvailable) {
+      return this._syncFromServer().then(function() {
+        return this._syncToServer();
+      }.bind(this));
+    }
+    return Promise.resolve();
+  },
+
+  /** 通知 UI 数据已变更（触发页面重新渲染） */
+  _notifyDataChange: function() {
+    if (typeof Router !== 'undefined' && Router.handleHash) {
+      try { Router.handleHash(); } catch (e) {}
+    }
   },
 
   /** 确保超级管理员账号始终存在 */
@@ -167,7 +342,10 @@ var Store = {
     }
   },
 
-  _write(data) { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data)); },
+  _write(data) {
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+    this._scheduleSync();  // 触发防抖推送到 NAS 服务器
+  },
 
   _update(fn) {
     var data = this._read();

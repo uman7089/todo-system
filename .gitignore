@@ -17,3 +17,7 @@ desktop.ini
 *.tmp
 *.bak
 *.log
+
+# NAS sync data files (runtime generated, should not be in git)
+data.json
+backups/
